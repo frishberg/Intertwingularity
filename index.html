@@ -2018,20 +2018,33 @@ function drawWorld(t, { holes = [], glow = null, cleared = [] } = {}) {
 }
 
 /* =====================================================================
-   the monsters: each hometown's outline, cut from the satellite, outlined
-   in yellow the way the head is, with an eye and a jaw and something of
-   its own. to use a drawn one instead, save it as assets/monster-<key>.png
-   and add its key here, e.g. ['ar', 'ny'].
+   the monsters, as the team drew them: each one cut off its map by
+   tools/cut_monsters.py into assets/monster-<key>.png. eye and mouth are
+   where they are on the drawing, as fractions of it (the tool prints them).
+   faces: which way the drawing looks. the game turns them to face where
+   they're going, and takes west as the way they look at rest.
+   until a drawing loads, the old stand-in is built from the outline below.
    ===================================================================== */
-const DRAWN_MONSTERS = [];
+const DRAWN = {
+  head: { eye: [0.313, 0.376], mouth: [0.131, 0.607], faces: 'west' },
+  ar:   { eye: [0.641, 0.329], mouth: [0.667, 0.653], faces: 'east' },
+  sc:   { eye: [0.545, 0.219], mouth: [0.554, 0.342], faces: 'front' },
+  ny:   { eye: [0.211, 0.465], mouth: [0.07, 0.619],  faces: 'west' },
+  in:   { eye: [0.193, 0.421], mouth: [0.298, 0.532], faces: 'west' },
+};
+const DRAWN_MONSTERS = Object.keys(DRAWN);
 const BEAST_DEF = {
   ar: { name: 'THE RAZORBACK', tint: 'rgba(130,40,24,0.38)', acc: 'razor' },
   sc: { name: 'THE PALMETTO', tint: 'rgba(16,36,110,0.42)', acc: 'palmetto' },
   ny: { name: 'THE EMPIRE', tint: 'rgba(50,80,100,0.38)', acc: 'crown' },
   in: { name: 'THE SUBCONTINENT', tint: 'rgba(190,110,20,0.3)', acc: 'peacock' },
 };
-const BEASTS = {}, BEAST_ART = {};
-for (const k of DRAWN_MONSTERS) { const im = new Image(); im.onload = () => { BEAST_ART[k] = im; delete BEASTS[k]; }; im.src = `assets/monster-${k}.png`; }
+const BEASTS = {}, BEAST_ART = {}, HAPPY_ART = {};
+// each one twice: as it fights, and smiling (monster-<key>-happy.png) for the run home at the end
+for (const k of DRAWN_MONSTERS) {
+  const im = new Image(); im.onload = () => { BEAST_ART[k] = im; delete BEASTS[k]; }; im.src = `assets/monster-${k}.png`;
+  const hm = new Image(); hm.onload = () => { HAPPY_ART[k] = hm; delete BEASTS[k]; }; hm.src = `assets/monster-${k}-happy.png`;
+}
 let faceM = null;
 const FACE_EYE = [123, 211], FACE_MOUTH = [62, 312];
 function menaceFace() {
@@ -2045,9 +2058,20 @@ function menaceFace() {
 }
 function beastFor(key) {
   if (BEASTS[key]) return BEASTS[key];
+  if (BEAST_ART[key]) {
+    // a drawing: kept at its own resolution, but drawn at a size in the same units as the stand-ins,
+    // the head as tall as the face on the map, the others about as big as the 240-wide outlines
+    const im = BEAST_ART[key], d = DRAWN[key], ar = im.naturalWidth / im.naturalHeight;
+    const h = key === 'head' ? FACE.h : Math.round(236 / Math.sqrt(ar)), w = Math.round(h * ar);
+    const b = BEASTS[key] = { c: im, w, h, eye: [d.eye[0] * w, d.eye[1] * h], mouth: [d.mouth[0] * w, d.mouth[1] * h], ms: w / 480, er: 0, drawn: true,
+      face: d.faces === 'east' ? -1 : 1, front: d.faces === 'front', name: key === 'head' ? 'THE HEAD' : BEAST_DEF[key].name };
+    // the smiling one, the same height so it swaps in without a jump
+    const hm = HAPPY_ART[key];
+    if (hm) b.happy = { ...b, c: hm, w: Math.round(h * hm.naturalWidth / hm.naturalHeight), smiling: true };
+    return b;
+  }
   if (key === 'head') { const c = menaceFace(); return c ? (BEASTS.head = { c, w: FACE.w, h: FACE.h, eye: FACE_EYE, mouth: FACE_MOUTH, ms: 1, er: 15, name: 'THE HEAD' }) : null; }
   const def = BEAST_DEF[key], lc = landCanvas();
-  if (BEAST_ART[key]) { const im = BEAST_ART[key]; return (BEASTS[key] = { c: im, w: im.naturalWidth, h: im.naturalHeight, eye: [im.naturalWidth * 0.3, im.naturalHeight * 0.4], mouth: [im.naturalWidth * 0.2, im.naturalHeight * 0.65], ms: im.naturalWidth / 700, er: 0, name: def.name }); }
   const pts = SHAPES[key], lat0 = pts.reduce((a, p) => a + p[1], 0) / pts.length * Math.PI / 180;
   const proj = pts.map(([lo, la]) => [lo * Math.cos(lat0), -la]);
   const xs = proj.map(p => p[0]), ys = proj.map(p => p[1]), bx0 = Math.min(...xs), by0 = Math.min(...ys), bw = Math.max(...xs) - bx0, bh = Math.max(...ys) - by0;
@@ -2107,11 +2131,31 @@ function accessory(x, acc, P2, { W, H, top, cx, cy, mouth }) {
 /** a monster on ctx, centered at (cx, cy), scale sc (screen px per art px), alive: a burning eye that watches, a jaw */
 function drawBeast(ctx, b, cx, cy, sc, { tilt = 0, flip = 1, jaw = 0, glow = 1, look = 0, hurt = 0, shadow = true, happy = false } = {}) {
   if (!b) return;
-  ctx.save(); ctx.translate(cx, cy); ctx.rotate(tilt); ctx.scale(sc * flip, sc); ctx.translate(-b.w / 2, -b.h / 2);
-  if (shadow) { ctx.save(); ctx.globalAlpha = 0.45; ctx.filter = 'brightness(0) blur(10px)'; ctx.drawImage(b.c, 28 * b.ms * flip, 40 * b.ms); ctx.restore(); }
-  ctx.drawImage(b.c, 0, 0);
-  if (hurt > 0) { ctx.save(); ctx.globalAlpha = Math.min(1, hurt); ctx.globalCompositeOperation = 'lighter'; ctx.drawImage(b.c, 0, 0); ctx.restore(); }
+  if (happy && b.happy) b = b.happy;                     // the drawing of it smiling, when there is one
+  flip *= b.face || 1;                                  // a drawing that looks east is turned to look west at rest
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(tilt); ctx.scale(sc * flip, sc);
+  if (b.drawn) { const p = jaw > 0.5 ? (jaw - 0.5) * 2 : 0; ctx.scale(1 + 0.05 * p, 1 + 0.08 * p); }   // a drawing can't open its jaw: it rears up instead
+  ctx.translate(-b.w / 2, -b.h / 2);
+  if (shadow) { ctx.save(); ctx.globalAlpha = 0.45; ctx.filter = 'brightness(0) blur(10px)'; ctx.drawImage(b.c, 28 * b.ms * flip, 40 * b.ms, b.w, b.h); ctx.restore(); }
+  ctx.drawImage(b.c, 0, 0, b.w, b.h);
+  if (hurt > 0) { ctx.save(); ctx.globalAlpha = Math.min(1, hurt); ctx.globalCompositeOperation = 'lighter'; ctx.drawImage(b.c, 0, 0, b.w, b.h); ctx.restore(); }
   const m = b.ms;
+  if (b.drawn) {
+    // the drawing has its own face; all it gets is a red burn in the eye when it's angry, and a blush when it's happy
+    const [ex, ey] = b.eye, [mx, my] = b.mouth, r = b.w * 0.07;
+    if (glow > 1.05 && !happy) {
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const gr = ctx.createRadialGradient(ex, ey, 0, ex, ey, r * 1.6 * glow); gr.addColorStop(0, `rgba(255,40,30,${Math.min(0.7, (glow - 1) * 1.4)})`); gr.addColorStop(1, 'rgba(255,40,30,0)');
+      ctx.fillStyle = gr; ctx.fillRect(ex - r * 3.5, ey - r * 3.5, r * 7, r * 7); ctx.restore();
+    }
+    if (happy && !b.smiling) {                           // no smiling drawing (yet): a blush instead
+      ctx.fillStyle = 'rgba(255,120,150,0.6)';
+      const cheeks = b.front ? [[ex - b.w * 0.12, ey + r * 1.3], [ex + b.w * 0.12, ey + r * 1.3]] : [[lerp(ex, mx, 0.5), lerp(ey, my, 0.45)]];
+      for (const [qx, qy] of cheeks) { ctx.beginPath(); ctx.ellipse(qx, qy, r * 0.9, r * 0.5, 0, 0, Math.PI * 2); ctx.fill(); }
+    }
+    ctx.restore();
+    return;
+  }
   if (jaw > 0.02 && !happy) {
     const [mx, my] = b.mouth, o = jaw * 46 * m;
     ctx.fillStyle = '#12000a'; ctx.beginPath(); ctx.moveTo(mx - 52 * m, my - 4 * m); ctx.lineTo(mx + 34 * m, my - 10 * m); ctx.lineTo(mx + 30 * m, my + o * 0.8); ctx.lineTo(mx - 40 * m, my + o); ctx.closePath(); ctx.fill();
@@ -2441,7 +2485,9 @@ function journeyFrame(dt, time) {
       if (j.nextLunge <= 0 && dist < 720) { const a = Math.atan2(j.py + j.pvy * 0.3 - j.hy, j.px + j.pvx * 0.3 - j.hx); j.lunge = { t: 0, a }; j.nextLunge = lerp(5, 3.8, prog) + Math.random() * 1.2; growl(0.7, 0.11); }
     }
     if (Math.random() < 0.25) j.smoke.push({ x: j.hx + (Math.random() - 0.3) * 260 * U, y: j.hy + (Math.random() - 0.5) * 300 * U, vx: 20 * U, vy: -10 * U, t: 0 });
-    const mouth = [j.hx + (FACE_MOUTH[0] - FACE.w / 2) * U * flip, j.hy + (FACE_MOUTH[1] - FACE.h / 2) * U];
+    // its mouth, wherever it is on whichever head is showing (drawBeast mirrors it the same way)
+    const hb = beastFor('head') || { w: FACE.w, h: FACE.h, mouth: FACE_MOUTH }, hf = flip * (hb.face || 1);
+    const mouth = [j.hx + (hb.mouth[0] - hb.w / 2) * U * hf, j.hy + (hb.mouth[1] - hb.h / 2) * U];
     const inHead = ((j.px - j.hx) / (135 * U)) ** 2 + ((j.py - j.hy) / (180 * U)) ** 2 < 1, inMouth = Math.hypot(j.px - mouth[0], j.py - mouth[1]) < 45 * U;
     if (j.grace <= 0 && j.dashT <= 0 && (inHead || inMouth)) { j.phase = 'caught'; j.caughtT = 0; chomp(); roar(); }
     if (!j.half && prog > 0.5) { j.half = true; j.spawn = [j.px, j.py]; j.msg = { s: 'HALFWAY', t: 0 }; note(784, 0.3, 'triangle', 0.04); note(1046.5, 0.4, 'triangle', 0.035, 0.1); }
@@ -2487,7 +2533,7 @@ function journeyFrame(dt, time) {
   if (headOn && hs > 0) {
     const ax = X + j.hx * s, ay = Y + (j.hy + hoy) * s, gr = h.createRadialGradient(ax, ay, 100 * hs * s, ax, ay, 520 * hs * s);
     gr.addColorStop(0, 'rgba(160,0,20,0.22)'); gr.addColorStop(1, 'rgba(160,0,20,0)'); h.fillStyle = gr; h.fillRect(ax - 520 * hs * s, ay - 520 * hs * s, 1040 * hs * s, 1040 * hs * s);
-    drawBeast(h, beastFor('head'), ax, ay, s * hs, { tilt, flip, jaw: j.jaw, glow, look: toP, hurt });
+    drawBeast(h, beastFor('head'), ax, ay, s * hs, { tilt, flip, jaw: j.jaw, glow, look: toP, hurt, happy: j.phase === 'final' });   // beaten, it comes home happy too
   }
   if (j.phase === 'final' && t > 2.6) {
     // the four you beat, friendly now, skipping along behind you, then gathered round the crest
